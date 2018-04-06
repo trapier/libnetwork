@@ -6,30 +6,31 @@ title: Debug overlay or swarm networking issues
 
 **WARNING**
 This tool can change the internal state of the libnetwork API, be really mindful
-on its use and read carefully the following guide. Improper use of it will damage
+on its use and carefully read the following guide. Improper use of it will damage
 or permanently destroy the network configuration.
 
 
 Docker CE 17.12 and higher introduce a network debugging tool designed to help
-debug issues with overlay networks and swarm services running on Linux hosts.
-When enabled, a network diagnostic server listens on the specified port and
-provides diagnostic information. The network debugging tool should only be
-started to debug specific issues, and should not be left running all the time.
+troubleshoot issues with overlay networks and swarm services running on Linux
+hosts.  When enabled, a server in the engine listens on a configurable port and
+provides network diagnostic information. This troubleshooting tool should only
+be started to debug specific issues, and should not be left running all the
+time.
 
-Information about networks is stored in the database, which can be examined using
-the API. Currently the database contains information about the overlay network
-as well as the service discovery data.
+Information about networks is stored in a database which can be examined using
+the API exposed by this tool. Currently the database contains information about
+overlay networks as well as service discovery data.
 
-The Docker API exposes endpoints to query and control the network debugging
-tool. CLI integration is provided as a preview, but the implementation is not
-yet considered stable and commands and options may change without notice.
+The API exposes endpoints to query and control the network debugging tool.  A
+CLI integration is provided as a preview, but the implementation is not yet
+considered stable and commands and options may change without notice.
 
-The tool is available into 2 forms:
-1) client only: dockereng/network-diagnostic:onlyclient
-2) docker in docker version: dockereng/network-diagnostic:17.12-dind
-The latter allows to use the tool with a cluster running an engine older than 17.12
+The tool is available in the form of two container images:
+1) client CLI only: `dockereng/network-diagnostic:onlyclient`
+2) client CLI plus "docker in docker" engine: `dockereng/network-diagnostic:17.12-dind`
+The latter allows use of the tool with a cluster running an engine older than 17.12.
 
-## Enable the diagnostic server
+## Enable the diagnostic server on a running Docker engine
 
 The tool currently only works on Docker hosts running on Linux. To enable it on a node
 follow the step below.
@@ -41,11 +42,11 @@ follow the step below.
     “network-diagnostic-port”: <port>
     ```
 
-2.  Get the process ID (PID) of the `dockerd` process. It is the second field in
-    the output, and is typically a number from 2 to 6 digits long.
+2.  Get the process ID (PID) of the `dockerd` process. It is typically a number
+    from 2 to 6 digits long.
 
     ```bash
-    $ ps aux |grep dockerd | grep -v grep
+    $ ps h -o pid -C dockerd
     ```
 
 3.  Reload the Docker configuration without restarting Docker, by sending the
@@ -55,27 +56,28 @@ follow the step below.
     kill -HUP <pid-of-dockerd>
     ```
 
-If systemd is used the command `systemctl reload docker` will be enough
+If the OS uses systemd, the command `systemctl reload docker` can be used to
+perform steps 2 and 3 automatically.
 
 
-A message like the following will appear in the Docker host logs:
+A message like the following will appear in the Docker engine logs:
 
 ```none
 Starting the diagnostic server listening on <port> for commands
 ```
 
-## Disable the diagnostic tool
+## Disable the diagnostic server on a running Docker engine
 
 Repeat these steps for each node participating in the swarm.
 
 1.  Remove the `network-diagnostic-port` key from the `/etc/docker/daemon.json`
     configuration file.
 
-2.  Get the process ID (PID) of the `dockerd` process. It is the second field in
-    the output, and is typically a number from 2 to 6 digits long.
+2.  Get the process ID (PID) of the `dockerd` process. It is typically a number
+    from 2 to 6 digits long.
 
     ```bash
-    $ ps aux |grep dockerd | grep -v grep
+    $ ps h -o pid -C dockerd
     ```
 
 3.  Reload the Docker configuration without restarting Docker, by sending the
@@ -85,7 +87,7 @@ Repeat these steps for each node participating in the swarm.
     kill -HUP <pid-of-dockerd>
     ```
 
-A message like the following will appear in the Docker host logs:
+A message like the following will appear in the Docker engine logs:
 
 ```none
 Disabling the diagnostic server
@@ -97,7 +99,7 @@ The network diagnostic tool exposes its own RESTful API. To access the API,
 send a HTTP request to the port where the tool is listening. The following
 commands assume the tool is listening on port 2000.
 
-Examples are not given for every endpoint.
+Usage examples for some (but not all) endpoints are provided below.
 
 ### Get help
 
@@ -178,16 +180,17 @@ $ curl localhost:2000/<method>?nid=<network id>&tname=<table name>&key=<key>[&va
 ```
 
 Note:
-operations on tables have node ownership, this means that are going to remain persistent till
-the node that inserted them is part of the cluster
+Create operations on tables have node ownership; this means they persist only
+while the node that inserted them remains in the cluster.
 
 ## Access the diagnostic tool's CLI
 
-The CLI is provided as a preview and is not yet stable. Commands or options may
-change at any time.
+The client CLI is provided as a preview and is not yet stable. Commands or
+options may change at any time.
 
-The CLI executable is called `diagnosticClient` and is made available using a
-standalone container.
+The client CLI is an executable called `diagnosticClient`.  For clusters
+running 17.12 or later, it is available via the entrypoint of a "client only"
+container.
 
 `docker run --net host dockereng/network-diagnostic:onlyclient -v -net <full network id> -t sd`
 
@@ -202,21 +205,24 @@ The following flags are supported:
 | -a            | Join/leave network                              |
 | -v            | Enable verbose output.                          |
 
-*NOTE*
-By default the tool won't try to join the network. This is following the intent to not change
-the state on which the node is when the diagnostic client is run. This means that it is safe
-to run the diagnosticClient against a running daemon because it will just dump the current state.
-When using instead the diagnosticClient in the containerized version the flag `-a` MUST be passed
-to avoid retrieving empty results. On the other side using the `-a` flag against a loaded daemon
-will have the undesirable side effect to leave the network and so cutting down the data path for
-that daemon.
+*NOTE* `-a` is not needed and should be avoided for networks associated with
+active workloads on a running engine. The `-a` flag causes the engine to join
+*and then leave* the specified network, which will sever any active workloads
+on the engine from that network .  If `diagnoseClient` it is talking to an
+engine with running containers on a particular network the `-a` flag is not
+needed; `diagnoseClient` will simply dump current state.  When running
+`diagnosticClient` with the `dind` container, however, the `-a` flag is
+required to avoid retrieving empty results.
 
 ### Container version of the diagnostic tool
 
-The CLI is provided as a container with a 17.12 engine that needs to run using privileged mode.
+A container image providing both the client CLI and a 17.12 "dind" engine is
+available for troubleshooting in clusters on versions prior to 17.12.  The
+container needs to be run using privileged mode so that it can open privileged
+ports and join the cluster.
 *NOTE*
-Remember that table operations have ownership, so any `create entry` will be persistent till
-the diagnostic container is part of the swarm.
+Remember that table operations have node ownership, so any `create entry` will
+persist only so long as the diagnostic container remains in the swarm.
 
 1.  Make sure that the node where the diagnostic client will run is not part of the swarm, if so do `docker swarm leave -f`
 
@@ -226,20 +232,51 @@ the diagnostic container is part of the swarm.
     $ docker container run --name net-diagnostic -d --privileged --network host dockereng/network-diagnostic:17.12-dind
     ```
 
-3.  Connect to the container using `docker exec -it <container-ID> sh`,
+3.  Connect to the container using `docker exec -it net-diagnostic sh`,
     and start the server using the following command:
 
     ```bash
     $ kill -HUP 1
     ```
 
-4.  Join the diagnostic container to the swarm, then run the diagnostic CLI within the container.
+4.  Join the diagnostic container as a worker to the swarm:
+
+    ```bash
+    $ docker swarm join <worker-join-token>
+    ```
+
+    `<worker-join-token>` can be found by running `docker swarm join-token worker -q` on a manager
+
+
+5.  On a manager node set the diagnostic container's availability status to
+    `drain` to prevent the cluster from scheduling tasks to it:
+
+
+    ```bash
+    $ docker node update --availability drain <nodeid>
+    ```
+
+6. Run the diagnostic CLI within the container.
 
     ```bash
     $ ./diagnosticClient <flags>...
     ```
 
-4.  When finished debugging, leave the swarm and stop the container.
+7.  When finished debugging, leave the swarm and stop the container.
+
+
+    ```bash
+    $ docker swarm leave
+    Node left the swarm.
+    $ exit
+    ```
+
+8.  On a manager node, remote the diagnostic container from the swarm.
+
+
+    ```bash
+    $ docker node rm <nodeid>
+    ```
 
 ### Examples
 
@@ -247,16 +284,17 @@ The following commands dump the service discovery table and verify node
 ownership.
 
 *NOTE*
-Remember to use the full network ID, you can easily find that with `docker network ls --no-trunc`
+Remember to use the full network ID. You can easily find that with `docker
+network ls --no-trunc`.
 
 **Service discovery and load balancer:**
 
 ```bash
-$ diagnostiClient -t sd -v -net n8a8ie6tb3wr2e260vxj8ncy4 -a
+$ diagnosticClient -t sd -v -net n8a8ie6tb3wr2e260vxj8ncy4 -a
 ```
 
 **Overlay network:**
 
 ```bash
-$ diagnostiClient -port 2001 -t overlay -v -net n8a8ie6tb3wr2e260vxj8ncy4 -a
+$ diagnosticClient -port 2001 -t overlay -v -net n8a8ie6tb3wr2e260vxj8ncy4 -a
 ```
